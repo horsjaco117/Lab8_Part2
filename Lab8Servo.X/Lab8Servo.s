@@ -5,7 +5,7 @@
 ; Fifth Semester
 ; ADC and lights
 ; Device: PIC16F883
-;GITHUB: https://github.com/horsjaco117/Lab8-ADC-Servo-Control
+;GITHUB: https://github.com/horsjaco117/Lab8_Part2
 ;-------------------------------------------------------------------------------
 ; Configuration
     ; CONFIG1
@@ -33,6 +33,21 @@
     RESULT_LO EQU 0X22
     W_TEMP EQU 0X23
     STATUS_TEMP EQU 0X24
+    COUNT1 EQU 0x25
+    COUNT2 EQU 0x26
+    COUNT3 EQU 0x27
+    COUNT4 EQU 0X28
+    COUNT5 EQU 0X29
+    COUNT6 EQU 0X2A
+    COUNT7 EQU 0X2B
+    COUNT1A EQU 0X2C
+    COUNT2A EQU 0X2D
+    COUNT3A EQU 0X2E
+    COUNT4A EQU 0X2F
+    COUNT5A EQU 0X30
+    COUNT6A EQU 0X31
+    COUNT7A EQU 0X32
+     
  
 ; Start of Program
 ; Reset vector address
@@ -114,16 +129,53 @@ Setup:
    
 ; Main Program Loop
 MAINLOOP:
-    ; Optional: Toggle PORTC for testing (add delay if needed)
-    MOVF PORTC,0	;Read current value of PortC into register(W)
-    XORLW 0X05		;XOR the working register with 0x05
-    MOVWF PORTC		;Outputs the value from register to outputs (PortC)
-    ; CALL  DELAY		;Delay of ~.5 seconds called (define subroutine if used)
-    
-    GOTO  MAINLOOP	;Repeats indefinitely
-    
+HIGH0:    
+	    MOVLW 0X01 ;91 HEX
+	    MOVWF COUNT3
+FINALLOOP0:  MOVLW 0X01 ;96 HEX
+	    MOVWF COUNT2
+OUTERLOOP0:  MOVLW 0X04; 19
+	    MOVWF COUNT1
+INNERLOOP0:  DECFSZ COUNT1
+	    GOTO INNERLOOP0
+	    DECFSZ COUNT2
+	    GOTO OUTERLOOP0
+	    DECFSZ COUNT3
+	    GOTO FINALLOOP0
+	    GOTO DISPLAYHIGH
+	    
+	    
+LOW0:
+	    MOVLW 0X01 ;91 HEX
+	    MOVWF COUNT6
+FINALLOOP1:  MOVLW 0X01 ;96 HEX
+	    MOVWF COUNT5
+OUTERLOOP1:  MOVLW 0X0; 19
+	    MOVWF COUNT4
+INNERLOOP1:  DECFSZ COUNT4
+	    GOTO INNERLOOP1
+	    DECFSZ COUNT5
+	    GOTO OUTERLOOP1
+	    DECFSZ COUNT6
+	    GOTO FINALLOOP1
+	    GOTO DISPLAYLOW
+	    
 
+	      	    
+DISPLAYHIGH:
+    MOVLW 0X01
+    MOVWF PORTC
+    GOTO LOW0
+DISPLAYLOW:
+    MOVLW 0X00
+    MOVWF PORTC
+    GOTO HIGH0
+    
+    GOTO MAINLOOP
+    
+    
 INTERRUPT:
+    
     MOVWF W_TEMP	;Saves all the data from mainloop
     SWAPF STATUS, W
     MOVWF STATUS_TEMP
@@ -150,6 +202,7 @@ CHECK_OTHER:
   
     
 EXIT_ISR:
+   
     SWAPF STATUS_TEMP, W;Loads all the data from the mainloop
     MOVWF STATUS
     SWAPF W_TEMP, F
