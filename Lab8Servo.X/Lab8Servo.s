@@ -47,6 +47,8 @@
     COUNT5A EQU 0X30
     COUNT6A EQU 0X31
     COUNT7A EQU 0X32
+    MODTIME EQU 0X33
+    MODTIME0 EQU 0X34
      
  
 ; Start of Program
@@ -128,49 +130,60 @@ Setup:
     BCF ADCON1, 7
    
 ; Main Program Loop
+; Main Program Loop
 MAINLOOP:
-HIGH0:    
-	    MOVLW 0X01 ;91 HEX
-	    MOVWF COUNT3
-FINALLOOP0:  MOVLW 0X01 ;96 HEX
-	    MOVWF COUNT2
-OUTERLOOP0:  MOVLW 0X04; 19
-	    MOVWF COUNT1
-INNERLOOP0:  DECFSZ COUNT1
-	    GOTO INNERLOOP0
-	    DECFSZ COUNT2
-	    GOTO OUTERLOOP0
-	    DECFSZ COUNT3
-	    GOTO FINALLOOP0
-	    GOTO DISPLAYHIGH
-	    
-	    
-LOW0:
-	    MOVLW 0X01 ;91 HEX
-	    MOVWF COUNT6
-FINALLOOP1:  MOVLW 0X01 ;96 HEX
-	    MOVWF COUNT5
-OUTERLOOP1:  MOVLW 0X0; 19
-	    MOVWF COUNT4
-INNERLOOP1:  DECFSZ COUNT4
-	    GOTO INNERLOOP1
-	    DECFSZ COUNT5
-	    GOTO OUTERLOOP1
-	    DECFSZ COUNT6
-	    GOTO FINALLOOP1
-	    GOTO DISPLAYLOW
-	    
 
-	      	    
-DISPLAYHIGH:
-    MOVLW 0X01
-    MOVWF PORTC
-    GOTO LOW0
-DISPLAYLOW:
-    MOVLW 0X00
-    MOVWF PORTC
-    GOTO HIGH0
     
+;SET_DELAY:
+ ;   MOVWF MODTIME         ; Store selected delay value in MODTIME
+ 
+DELAY:
+    ; No need to move MODTIME here; it?s set above
+
+HIGH0:    
+    MOVLW 0x01            ; Initialize COUNT3 for outer loop
+    MOVWF COUNT3
+FINALLOOP0:  
+    MOVLW 0x01            ; Initialize COUNT2 for middle loop
+    MOVWF COUNT2
+OUTERLOOP0:  
+    MOVLW 0X01      ; Load MODTIME into W for inner loop
+    MOVWF COUNT1
+INNERLOOP0:  
+    DECFSZ COUNT1         ; Decrement COUNT1 until zero
+    GOTO INNERLOOP0
+    DECFSZ COUNT2         ; Decrement COUNT2 until zero
+    GOTO OUTERLOOP0
+    DECFSZ MODTIME         ; Decrement COUNT3 until zero
+    GOTO FINALLOOP0
+    GOTO DISPLAYHIGH
+
+LOW0:
+   ; MOVLW MODTIME            ; Initialize COUNT6 for outer loop
+    ;MOVWF COUNT6
+FINALLOOP1:  
+    MOVLW 0x01            ; Initialize COUNT5 for middle loop
+    MOVWF COUNT5
+OUTERLOOP1:  
+    MOVLW 0X01      ; Load MODTIME into W for inner loop
+    MOVWF COUNT4
+INNERLOOP1:  
+    DECFSZ COUNT4         ; Decrement COUNT4 until zero
+    GOTO INNERLOOP1
+    DECFSZ COUNT5         ; Decrement COUNT5 until zero
+    GOTO OUTERLOOP1
+    DECFSZ MODTIME0         ; Decrement COUNT6 until zero
+    GOTO FINALLOOP1
+    GOTO DISPLAYLOW
+
+DISPLAYHIGH:
+    BSF PORTC, 0
+    GOTO LOW0
+
+DISPLAYLOW:
+    BCF PORTC, 0
+    GOTO HIGH0
+
     GOTO MAINLOOP
     
     
@@ -191,8 +204,35 @@ INTERRUPT:
     BANKSEL RESULT_LO   ; Back to Bank 0
     MOVWF RESULT_LO
     
-    MOVF RESULT_HI, W   ; Example: Output low byte to PORTC for testing
+    MOVF RESULT_HI, W   ; Example: Output low byte to PORTB for testing
     MOVWF PORTB
+    
+    BTFSC RESULT_HI, 7        
+    GOTO SET_LONG_DELAY   
+    GOTO SET_OTHER_DELAY          
+
+SET_OTHER_DELAY:
+    MOVLW 0X09
+    MOVWF MODTIME
+    MOVWF 0X09
+    MOVWF MODTIME0
+    
+    BCF PORTC, 7
+    BSF PORTC, 4
+    
+    GOTO EXIT_ISR
+
+SET_LONG_DELAY:
+    MOVLW 0X05
+    MOVWF MODTIME
+    
+    MOVLW 0X05
+    MOVWF MODTIME0
+    
+    BSF PORTC, 7
+    BCF PORTC, 4
+    
+    GOTO EXIT_ISR
     
 CHECK_OTHER:
     BTFSS PIR1, 1       ; Check TMR2IF
@@ -200,9 +240,11 @@ CHECK_OTHER:
     BCF PIR1,1          ; Clear TMR2IF
     BSF ADCON0, 1       ; Start next ADC conversion
   
-    
+        ; Check PORTB, bit 7 to determine delay duration
+
+
 EXIT_ISR:
-   
+    
     SWAPF STATUS_TEMP, W;Loads all the data from the mainloop
     MOVWF STATUS
     SWAPF W_TEMP, F
