@@ -1,19 +1,17 @@
-; Modified Assembly Code for PIC16F883
+; Assembly Code for PIC16F883
 ; This version maintains the ADC operation and Timer2 triggering as before.
 ; It implements variable duty cycle PWM using CCP1 module (output on RC2/CCP1 pin).
-; The 10-bit ADC result directly sets the PWM duty cycle: CCPR1L = ADRESH (bits 9:2), CCP1CON<5:4> = ADRESL<7:6> (bits 1:0).
+; The 10-bit ADC result directly sets the PWM duty cycle
 ; Since the ADC is left-justified (ADFM=0), this mapping is direct.
-; The PWM period is determined by Timer2 (PR2=0xF0, prescaler 1:4), matching the ADC sampling rate.
-; The LED blink logic on PORTB.0 has been removed, assuming PWM replaces it for variable brightness control.
-; An LED connected to RC2 would now have brightness proportional to the analog input.
-; The MODTIME settings and PORTC bit toggles are retained, but could be removed if unnecessary.
+; The PWM period is determined by Timer2 (PR2=0xF0, prescaler 1:16), matching the ADC sampling rate.
+; An LED connected to RC2 would now have brightness proportional to the analog input
 ; Initial duty cycle set to 0.
 
 ; LAB 8
 ; Jacob Horsley
 ; RCET
 ; Fifth Semester
-; ADC and lights
+; ADC and Servo Motors
 ; Device: PIC16F883
 ; GITHUB: https://github.com/horsjaco117/Lab8_Part2
 ;-------------------------------------------------------------------------------
@@ -42,29 +40,11 @@
 ;------------------------------------------------------------------------------
 ; Register/Variable Setup
     RESULT_HI EQU 0X21	      ;For ADC High Byte
-    RESULT_LO EQU 0X22
-    W_TEMP EQU 0X23
+    RESULT_LO EQU 0X22	      ;For ADC Low Byte
+    W_TEMP EQU 0X23	      ;These temp values are probably from a different project...
     STATUS_TEMP EQU 0X24
-    COUNT1 EQU 0x25
-    COUNT2 EQU 0x26
-    COUNT3 EQU 0x27
-    COUNT4 EQU 0X28
-    COUNT5 EQU 0X29
-    COUNT6 EQU 0X2A
-    COUNT7 EQU 0X2B
-    COUNT1A EQU 0X2C
-    COUNT2A EQU 0X2D
-    COUNT3A EQU 0X2E
-    COUNT4A EQU 0X2F
-    COUNT5A EQU 0X30
-    COUNT6A EQU 0X31
-    COUNT7A EQU 0X32
-    MODTIME EQU 0X33
-    MODTIME0 EQU 0X34
-    TEMP EQU 0X35
-    ; BLINK_COUNT removed as PWM replaces blink logic
-   
- 
+    TEMP EQU 0X25	    ;DO NOT ERASE THIS IS AN IMPORTANT VARIABLe
+
 ; Start of Program
 ; Reset vector address
     PSECT resetVect, class=CODE, delta=2
@@ -146,16 +126,14 @@ Setup:
     BANKSEL ADCON1 ; Set to left justified (ADFM=0)
     BCF ADCON1, 7
    
-    BCF STATUS, 5
+    BCF STATUS, 5 ;Ensuring the code is in bank 1
     BCF STATUS, 6
 
 ; Main Program Loop
 MAINLOOP:
     GOTO MAINLOOP
     
-    
 INTERRUPT:
-    
     MOVWF W_TEMP	;Saves all the data from mainloop
     SWAPF STATUS, W
     MOVWF STATUS_TEMP
@@ -164,49 +142,39 @@ INTERRUPT:
     GOTO CHECK_OTHER
     BCF PIR1, 6         ; Clear ADIF
     BANKSEL ADRESH      ; Ensure Bank 0 for ADRESH
-    MOVF ADRESH, W
+    MOVF ADRESH, W	;High register from ADC is saved
     MOVWF RESULT_HI
     BANKSEL ADRESL      ; Bank 1 for ADRESL
-    MOVF ADRESL, W
+    MOVF ADRESL, W	;Low register from ADC is saved too
     BANKSEL RESULT_LO   ; Back to Bank 0
     MOVWF RESULT_LO
     
-   ; Set PWM duty cycle from ADC result
-MOVF RESULT_HI, W   ; ADRESH = duty bits 9:2
-MOVWF CCPR1L
-MOVF CCP1CON, W     ; Preserve mode bits
-ANDLW 0x0F          ; Clear bits 7:4, but keep 3:0 for mode
-MOVWF W_TEMP        ; Temp store
-MOVF RESULT_LO, W   ; ADRESL bits 7:6 = duty bits 1:0
-ANDLW 0xC0          ; Isolate bits 7:6
-MOVWF TEMP          ; Move to temporary file register
-RRF TEMP, 1         ; Shift right: now bits 6:5 (use 1 for destination to file)
-RRF TEMP, 1         ; Shift right again: bits 5:4
-MOVF TEMP, W        ; Load shifted value back to W
-IORWF W_TEMP, W     ; Combine with cleared CCP1CON
-MOVWF CCP1CON       ; Update CCP1CON with new duty LSBs
+   ; Set PWM duty cycle from ADC result (Referenced from PWM example)
+    MOVF RESULT_HI, W   ; ADRESH = duty bits 9:2
+    MOVWF CCPR1L	;Sets the PWM for the defined period of the Timer
+    MOVF CCP1CON, W     ; Preserve mode bits
+    ANDLW 0x0F          ; Clear bits 7:4, but keep 3:0 for mode
+    MOVWF W_TEMP        ; Temp store
+    MOVF RESULT_LO, W   ; ADRESL bits 7:6 = duty bits 1:0
+    ANDLW 0xC0          ; Isolate bits 7:6
+    MOVWF TEMP          ; Move to temporary file register
+    RRF TEMP, 1         ; Shift right: now bits 6:5 (use 1 for destination to file)
+    RRF TEMP, 1         ; Shift right again: bits 5:4
+    MOVF TEMP, W        ; Load shifted value back to W
+    IORWF W_TEMP, W     ; Combine with cleared CCP1CON
+    MOVWF CCP1CON       ; Update CCP1CON with new duty LSBs
     
-    BTFSC RESULT_HI, 7        
-    GOTO SET_LONG_DELAY   
-    GOTO SET_OTHER_DELAY          
+    BTFSC RESULT_HI, 7  ;Bit test for basic light test     
+    GOTO LIGHT_SWAP2   
+    GOTO LIGHT_SWAP          
 
-SET_OTHER_DELAY:
-    MOVLW 0X09
-    MOVWF MODTIME
-    MOVLW 0X09
-    MOVWF MODTIME0
-    
+LIGHT_SWAP:	;Troubleshooting lights
     BCF PORTC, 7
     BSF PORTC, 4
     
     GOTO EXIT_ISR
 
-SET_LONG_DELAY:
-    MOVLW 0X05
-    MOVWF MODTIME
-    MOVLW 0X05
-    MOVWF MODTIME0
-    
+LIGHT_SWAP2:	;Troubleshooting lights
     BSF PORTC, 7
     BCF PORTC, 4
     
@@ -217,18 +185,13 @@ CHECK_OTHER:
     GOTO EXIT_ISR
     BCF PIR1,1          ; Clear TMR2IF
     
-    ; Removed LED blink logic
-    
 START_ADC:
     BSF ADCON0, 1       ; Start next ADC conversion
   
 EXIT_ISR:
-    
     SWAPF STATUS_TEMP, W;Loads all the data from the mainloop
     MOVWF STATUS
     SWAPF W_TEMP, F
     SWAPF W_TEMP, W
     RETFIE
-    
-    
 END
