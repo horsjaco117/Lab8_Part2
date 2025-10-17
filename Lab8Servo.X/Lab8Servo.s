@@ -1,11 +1,13 @@
 ; Modified Assembly Code for PIC16F883
-; This modified version maintains the ADC operation as in the original code, periodically triggering ADC conversions via Timer2 overflows.
-; Additionally, Timer2 is now used to toggle an LED connected to PORTB, bit 0 (RB0), at a rate determined by the ADC result.
-; Specifically, the blink period is modulated by the value in MODTIME (set to 0x09 or 0x05 based on the MSB of the ADC high byte).
-; A blink counter (BLINK_COUNT) is decremented each Timer2 interrupt; when it reaches zero, the LED is toggled, and the counter is reloaded from MODTIME.
-; The original assignment of RESULT_HI to PORTB (for testing) has been removed to avoid overwriting the LED state.
-; Other unused variables (e.g., COUNT1 to COUNT7) remain as placeholders but are not utilized in this implementation.
-; Corrections have been applied to apparent typos in the original code (e.g., redundant or erroneous MOVWF instructions in delay settings).
+; This version maintains the ADC operation and Timer2 triggering as before.
+; It implements variable duty cycle PWM using CCP1 module (output on RC2/CCP1 pin).
+; The 10-bit ADC result directly sets the PWM duty cycle: CCPR1L = ADRESH (bits 9:2), CCP1CON<5:4> = ADRESL<7:6> (bits 1:0).
+; Since the ADC is left-justified (ADFM=0), this mapping is direct.
+; The PWM period is determined by Timer2 (PR2=0xF0, prescaler 1:4), matching the ADC sampling rate.
+; The LED blink logic on PORTB.0 has been removed, assuming PWM replaces it for variable brightness control.
+; An LED connected to RC2 would now have brightness proportional to the analog input.
+; The MODTIME settings and PORTC bit toggles are retained, but could be removed if unnecessary.
+; Initial duty cycle set to 0.
 
 ; LAB 8
 ; Jacob Horsley
@@ -33,6 +35,8 @@
    
 ; Include Statements
 #include <xc.inc>
+#define W 0
+#define F 1
    
 ; Code Section
 ;------------------------------------------------------------------------------
@@ -57,7 +61,8 @@
     COUNT7A EQU 0X32
     MODTIME EQU 0X33
     MODTIME0 EQU 0X34
-    BLINK_COUNT EQU 0x35     ; New variable for blink timing counter
+    TEMP EQU 0X35
+    ; BLINK_COUNT removed as PWM replaces blink logic
    
  
 ; Start of Program
@@ -75,7 +80,7 @@ Setup:
     BSF STATUS, 5 ; Go to Bank 3
     BSF STATUS, 6
     CLRF ANSELH ; Set pins to digital I/O
-    MOVLW 0X02 ;Pin 3 selected
+    MOVLW 0X02 ;Pin 3 selected (AN1 on RA1)
     MOVWF ANSEL ;Sets Pins to analog
    
     ; Bank 2 (CM2CON0, CM2CON1)
@@ -95,14 +100,14 @@ Setup:
     MOVWF IOCB
     CLRF OPTION_REG ; Enable global pull-ups, clear Timer0 settings
     MOVLW 0X00
-    MOVWF TRISC ; Port C as outputs (for traffic lights)
-    MOVLW 0x03 ; RA0 as an input
-    MOVWF TRISA ; Set RA0, RA1 as inputs for buttons
-    MOVLW 0x42 ; ADIE enabled, timer 2 enabled too
+    MOVWF TRISC ; Port C as outputs (for traffic lights and PWM on RC2)
+    MOVLW 0x03 ; RA0, RA1 as inputs
+    MOVWF TRISA ; Set RA0, RA1 as inputs for buttons/analog
+    MOVLW 0x42 ; ADIE and TMR2IE enabled
     MOVWF PIE1
-    MOVLW 0xF0 ; Timer2 period set
+    MOVLW 0xFF ; Timer2 period set (PWM period = (PR2+1)*4*Tosc*prescaler)
     MOVWF PR2
-    MOVLW 0XC5 ; Voltage reference and clock select
+    MOVLW 0XC5 ; VREF and clock select
     MOVWF ADCON1
     BSF ADCON1, 7 ; Temporarily set ADFM=1 (right justified)
     
@@ -110,15 +115,18 @@ Setup:
     BCF STATUS, 5 ; Go to Bank 0
     BCF STATUS, 6
 
-    MOVLW 0XC5 ;AN1 pin selected, ADON=1, ADCS=01
+    MOVLW 0XC5 ; AN1 selected, ADON=1, ADCS=01 (Fosc/8)
     MOVWF ADCON0
     MOVLW 0x00 ; Interrupts disabled initially
     MOVWF INTCON
-    MOVLW 0X00  ;Clear peripheral interrupt flags
+    MOVLW 0X00  ; Clear peripheral interrupt flags
     MOVWF PIR1 
     MOVLW 0XC0 ; Enable GIE and PEIE
     MOVWF INTCON
-    CLRF CCP1CON ; Disable PWM
+    CLRF CCP1CON ; Disable PWM initially
+    CLRF CCPR1L  ; Set initial duty cycle to 0
+    MOVLW 0X0C   ; Enable PWM mode (CCP1CON = 0b00001100)
+    MOVWF CCP1CON
     MOVLW 0X00
     MOVWF PORTB ; Clear Port B
     CLRF CCP2CON ; Disable second PWM
@@ -131,19 +139,15 @@ Setup:
     CLRF CM2CON1 ; Disable Comparator 2
     MOVLW 0x00
     MOVWF TMR2 ; Reset Timer2
-    MOVLW 0x05 ; Prescaler 1:4, TMR2ON=1
+    MOVLW 0x06 ; Prescaler 1:4, TMR2ON=1
     MOVWF T2CON
     BSF ADCON0, 1 ; Start initial ADC conversion
 
-    BANKSEL ADCON1 ; Set to left justified
+    BANKSEL ADCON1 ; Set to left justified (ADFM=0)
     BCF ADCON1, 7
    
     BCF STATUS, 5
     BCF STATUS, 6
-
-    ; Initialize blink counter (default to 0x05 for startup)
-    MOVLW 0x05
-    MOVWF BLINK_COUNT
 
 ; Main Program Loop
 MAINLOOP:
@@ -167,7 +171,20 @@ INTERRUPT:
     BANKSEL RESULT_LO   ; Back to Bank 0
     MOVWF RESULT_LO
     
-    ; Removed: MOVF RESULT_HI, W ; MOVWF PORTB (to avoid overwriting LED state)
+   ; Set PWM duty cycle from ADC result
+MOVF RESULT_HI, W   ; ADRESH = duty bits 9:2
+MOVWF CCPR1L
+MOVF CCP1CON, W     ; Preserve mode bits
+ANDLW 0x0F          ; Clear bits 7:4, but keep 3:0 for mode
+MOVWF W_TEMP        ; Temp store
+MOVF RESULT_LO, W   ; ADRESL bits 7:6 = duty bits 1:0
+ANDLW 0xC0          ; Isolate bits 7:6
+MOVWF TEMP          ; Move to temporary file register
+RRF TEMP, 1         ; Shift right: now bits 6:5 (use 1 for destination to file)
+RRF TEMP, 1         ; Shift right again: bits 5:4
+MOVF TEMP, W        ; Load shifted value back to W
+IORWF W_TEMP, W     ; Combine with cleared CCP1CON
+MOVWF CCP1CON       ; Update CCP1CON with new duty LSBs
     
     BTFSC RESULT_HI, 7        
     GOTO SET_LONG_DELAY   
@@ -176,7 +193,7 @@ INTERRUPT:
 SET_OTHER_DELAY:
     MOVLW 0X09
     MOVWF MODTIME
-    MOVLW 0X09   ; Corrected typo from original (was MOVWF 0X09)
+    MOVLW 0X09
     MOVWF MODTIME0
     
     BCF PORTC, 7
@@ -200,13 +217,7 @@ CHECK_OTHER:
     GOTO EXIT_ISR
     BCF PIR1,1          ; Clear TMR2IF
     
-    ; LED toggle logic using Timer2
-    DECFSZ BLINK_COUNT, F
-    GOTO START_ADC
-    MOVLW 0x01          ; Mask for RB0
-    XORWF PORTB, F      ; Toggle the LED on PORTB, bit 0
-    MOVF MODTIME, W     ; Reload counter from MODTIME (set by ADC)
-    MOVWF BLINK_COUNT
+    ; Removed LED blink logic
     
 START_ADC:
     BSF ADCON0, 1       ; Start next ADC conversion
