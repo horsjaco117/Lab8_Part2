@@ -4,7 +4,6 @@
 ; The 10-bit ADC result directly sets the PWM duty cycle
 ; Since the ADC is left-justified (ADFM=0), this mapping is direct.
 ; The PWM period is determined by Timer2 (PR2=0xF0, prescaler 1:16), matching the ADC sampling rate.
-; An LED connected to RC2 would now have brightness proportional to the analog input
 ; Initial duty cycle set to 0.
 
 ; LAB 8
@@ -85,7 +84,7 @@ Setup:
     MOVWF TRISA ; Set RA0, RA1 as inputs for buttons/analog
     MOVLW 0x42 ; ADIE and TMR2IE enabled
     MOVWF PIE1
-    MOVLW 0xFF ; Timer2 period set (PWM period = (PR2+1)*4*Tosc*prescaler)
+    MOVLW 0xAF ; Timer2 period set (PWM period = (PR2+1)*4*Tosc*prescaler)
     MOVWF PR2
     MOVLW 0XC5 ; VREF and clock select
     MOVWF ADCON1
@@ -126,6 +125,7 @@ Setup:
     BANKSEL ADCON1 ; Set to left justified (ADFM=0)
     BCF ADCON1, 7
    
+
     BCF STATUS, 5 ;Ensuring the code is in bank 1
     BCF STATUS, 6
 
