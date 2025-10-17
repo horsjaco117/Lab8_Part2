@@ -1,3 +1,11 @@
+; Modified Assembly Code for PIC16F883
+; This modified version maintains the ADC operation as in the original code, periodically triggering ADC conversions via Timer2 overflows.
+; Additionally, Timer2 is now used to toggle an LED connected to PORTB, bit 0 (RB0), at a rate determined by the ADC result.
+; Specifically, the blink period is modulated by the value in MODTIME (set to 0x09 or 0x05 based on the MSB of the ADC high byte).
+; A blink counter (BLINK_COUNT) is decremented each Timer2 interrupt; when it reaches zero, the LED is toggled, and the counter is reloaded from MODTIME.
+; The original assignment of RESULT_HI to PORTB (for testing) has been removed to avoid overwriting the LED state.
+; Other unused variables (e.g., COUNT1 to COUNT7) remain as placeholders but are not utilized in this implementation.
+; Corrections have been applied to apparent typos in the original code (e.g., redundant or erroneous MOVWF instructions in delay settings).
 
 ; LAB 8
 ; Jacob Horsley
@@ -5,7 +13,7 @@
 ; Fifth Semester
 ; ADC and lights
 ; Device: PIC16F883
-;GITHUB: https://github.com/horsjaco117/Lab8_Part2
+; GITHUB: https://github.com/horsjaco117/Lab8_Part2
 ;-------------------------------------------------------------------------------
 ; Configuration
     ; CONFIG1
@@ -49,7 +57,8 @@
     COUNT7A EQU 0X32
     MODTIME EQU 0X33
     MODTIME0 EQU 0X34
-     
+    BLINK_COUNT EQU 0x35     ; New variable for blink timing counter
+   
  
 ; Start of Program
 ; Reset vector address
@@ -93,9 +102,9 @@ Setup:
     MOVWF PIE1
     MOVLW 0xF0 ; Timer2 period set
     MOVWF PR2
-    MOVLW 0XC5 ;Right adjust
+    MOVLW 0XC5 ; Voltage reference and clock select
     MOVWF ADCON1
-    BSF ADCON1, 7
+    BSF ADCON1, 7 ; Temporarily set ADFM=1 (right justified)
     
     ; Bank 0 (INTCON, ports, peripherals)
     BCF STATUS, 5 ; Go to Bank 0
@@ -126,64 +135,18 @@ Setup:
     MOVWF T2CON
     BSF ADCON0, 1 ; Start initial ADC conversion
 
-    BANKSEL ADCON1 ;Ensures the code is right justified to avoid the lsb
+    BANKSEL ADCON1 ; Set to left justified
     BCF ADCON1, 7
    
-; Main Program Loop
+    BCF STATUS, 5
+    BCF STATUS, 6
+
+    ; Initialize blink counter (default to 0x05 for startup)
+    MOVLW 0x05
+    MOVWF BLINK_COUNT
+
 ; Main Program Loop
 MAINLOOP:
-
-    
-;SET_DELAY:
- ;   MOVWF MODTIME         ; Store selected delay value in MODTIME
- 
-DELAY:
-    ; No need to move MODTIME here; it?s set above
-
-HIGH0:    
-    MOVLW 0x01            ; Initialize COUNT3 for outer loop
-    MOVWF COUNT3
-FINALLOOP0:  
-    MOVLW 0x01            ; Initialize COUNT2 for middle loop
-    MOVWF COUNT2
-OUTERLOOP0:  
-    MOVLW 0X01      ; Load MODTIME into W for inner loop
-    MOVWF COUNT1
-INNERLOOP0:  
-    DECFSZ COUNT1         ; Decrement COUNT1 until zero
-    GOTO INNERLOOP0
-    DECFSZ COUNT2         ; Decrement COUNT2 until zero
-    GOTO OUTERLOOP0
-    DECFSZ MODTIME         ; Decrement COUNT3 until zero
-    GOTO FINALLOOP0
-    GOTO DISPLAYHIGH
-
-LOW0:
-   ; MOVLW MODTIME            ; Initialize COUNT6 for outer loop
-    ;MOVWF COUNT6
-FINALLOOP1:  
-    MOVLW 0x01            ; Initialize COUNT5 for middle loop
-    MOVWF COUNT5
-OUTERLOOP1:  
-    MOVLW 0X01      ; Load MODTIME into W for inner loop
-    MOVWF COUNT4
-INNERLOOP1:  
-    DECFSZ COUNT4         ; Decrement COUNT4 until zero
-    GOTO INNERLOOP1
-    DECFSZ COUNT5         ; Decrement COUNT5 until zero
-    GOTO OUTERLOOP1
-    DECFSZ MODTIME0         ; Decrement COUNT6 until zero
-    GOTO FINALLOOP1
-    GOTO DISPLAYLOW
-
-DISPLAYHIGH:
-    BSF PORTC, 0
-    GOTO LOW0
-
-DISPLAYLOW:
-    BCF PORTC, 0
-    GOTO HIGH0
-
     GOTO MAINLOOP
     
     
@@ -204,8 +167,7 @@ INTERRUPT:
     BANKSEL RESULT_LO   ; Back to Bank 0
     MOVWF RESULT_LO
     
-    MOVF RESULT_HI, W   ; Example: Output low byte to PORTB for testing
-    MOVWF PORTB
+    ; Removed: MOVF RESULT_HI, W ; MOVWF PORTB (to avoid overwriting LED state)
     
     BTFSC RESULT_HI, 7        
     GOTO SET_LONG_DELAY   
@@ -214,7 +176,7 @@ INTERRUPT:
 SET_OTHER_DELAY:
     MOVLW 0X09
     MOVWF MODTIME
-    MOVWF 0X09
+    MOVLW 0X09   ; Corrected typo from original (was MOVWF 0X09)
     MOVWF MODTIME0
     
     BCF PORTC, 7
@@ -225,7 +187,6 @@ SET_OTHER_DELAY:
 SET_LONG_DELAY:
     MOVLW 0X05
     MOVWF MODTIME
-    
     MOVLW 0X05
     MOVWF MODTIME0
     
@@ -238,11 +199,18 @@ CHECK_OTHER:
     BTFSS PIR1, 1       ; Check TMR2IF
     GOTO EXIT_ISR
     BCF PIR1,1          ; Clear TMR2IF
+    
+    ; LED toggle logic using Timer2
+    DECFSZ BLINK_COUNT, F
+    GOTO START_ADC
+    MOVLW 0x01          ; Mask for RB0
+    XORWF PORTB, F      ; Toggle the LED on PORTB, bit 0
+    MOVF MODTIME, W     ; Reload counter from MODTIME (set by ADC)
+    MOVWF BLINK_COUNT
+    
+START_ADC:
     BSF ADCON0, 1       ; Start next ADC conversion
   
-        ; Check PORTB, bit 7 to determine delay duration
-
-
 EXIT_ISR:
     
     SWAPF STATUS_TEMP, W;Loads all the data from the mainloop
@@ -253,4 +221,3 @@ EXIT_ISR:
     
     
 END
-
