@@ -1,594 +1,345 @@
-; LAB 8 - Servo Motor Control (Thirty-Two Positions)
-; Jacob Horsley, Modified for Servo Control
-; RCET ? Fifth Semester
+; LAB 8
+; Jacob Horsley
+; RCET
+; Fifth Semester
+; ADC and lights (modified to servo control)
 ; Device: PIC16F883
-;
-; Description:
-;   Reads analog input on RA1 (AN1), maps 8-bit ADC high byte (0?255) to 32 servo positions
-;   (0.932 ms to 1.517 ms pulse widths in ~0.0189 ms steps, ~51.8° to 120.2° of servo range),
-;   and outputs PWM on CCP1 (RC2). Maintains ~20 ms PWM period using Timer2.
-;   Outputs ADRESH to PORTB for troubleshooting.
+; GITHUB: https://github.com/horsjaco117/Lab8_Part2
 ;-------------------------------------------------------------------------------
 ; Configuration
-    CONFIG  FOSC = INTRC_CLKOUT
-    CONFIG  WDTE = OFF
-    CONFIG  PWRTE = OFF
-    CONFIG  MCLRE = ON
-    CONFIG  CP = OFF
-    CONFIG  CPD = OFF
-    CONFIG  BOREN = OFF
-    CONFIG  IESO = OFF
-    CONFIG  FCMEN = OFF
-    CONFIG  LVP = OFF
-    CONFIG  BOR4V = BOR40V
-    CONFIG  WRT = OFF
-
+    ; CONFIG1
+    CONFIG FOSC = XT ; Oscillator Selection bits (XT oscillator)
+    CONFIG WDTE = OFF ; Watchdog Timer Enable bit (WDT disabled)
+    CONFIG PWRTE = OFF ; Power-up Timer Enable bit (PWRT disabled)
+    CONFIG MCLRE = ON ; RE3/MCLR pin function select bit (MCLR)
+    CONFIG CP = OFF ; Code Protection bit (Program memory code protection disabled)
+    CONFIG CPD = OFF ; Data Code Protection bit (Data memory code protection disabled)
+    CONFIG BOREN = OFF ; Brown Out Reset Selection bits (BOR disabled)
+    CONFIG IESO = OFF ; Internal External Switchover bit (disabled)
+    CONFIG FCMEN = OFF ; Fail-Safe Clock Monitor Enabled bit (disabled)
+    CONFIG LVP = OFF ; Low Voltage Programming Enable bit (RB3 is digital I/O)
+    ; CONFIG2
+    CONFIG BOR4V = BOR40V ; Brown-out Reset Selection bit (set to 4.0V)
+    CONFIG WRT = OFF ; Flash Program Memory Self Write Enable bits (Write protection off)
+   
 ; Include Statements
 #include <xc.inc>
-
+   
+; Code Section
+;------------------------------------------------------------------------------
 ; Register/Variable Setup
-    RESULT_HI EQU 0x21
-    W_TEMP EQU 0x23
-    STATUS_TEMP EQU 0x24
-
+    W_TEMP EQU 0X23
+    STATUS_TEMP EQU 0X24
+    ADC_SAVE EQU 0X22
+    TIME EQU 0X33
+     
+ 
 ; Start of Program
+; Reset vector address
     PSECT resetVect, class=CODE, delta=2
     GOTO Start
-
-; Interrupt Vector
+; Interrupt vector
     PSECT isrVect, class=CODE, delta=2
     GOTO INTERRUPT
-
 ; Setup Code
     PSECT code, class=CODE, delta=2
 Start:
 Setup:
-    ; Clock setup (4 MHz internal oscillator)
-    BCF STATUS, 6
-    BSF STATUS, 5
-    MOVLW 0x31
-    MOVWF OSCCON
-
     ; Bank 3 (ANSELH, ANSEL)
-    BSF STATUS, 5
+    BSF STATUS, 5 ; Go to Bank 3
     BSF STATUS, 6
-    CLRF ANSELH
-    MOVLW 0x02 ; AN1 selected
-    MOVWF ANSEL
-
+    CLRF ANSELH ; Set pins to digital I/O
+    MOVLW 0X01 ; Pin AN0 selected
+    MOVWF ANSEL ; Sets Pins to analog
+   
     ; Bank 2 (CM2CON0, CM2CON1)
     BSF STATUS, 5
-    BCF STATUS, 6
-    CLRF CM2CON1
-    CLRF CM2CON0
-
+    BCF STATUS, 6 ; Go to Bank 2
+    CLRF CM2CON1 ; Disable Comparator 2
+    CLRF CM2CON0 ; Disable Comparator 1
+   
     ; Bank 1 (TRISB, WPUB, IOCB, OPTION_REG, TRISC, TRISA, PIE1, PR2)
     BSF STATUS, 5
-    BCF STATUS, 6
-    MOVLW 0x00
+    BCF STATUS, 6 ; Go to Bank 1
+    MOVLW 0x00 ; PortB as Outputs
     MOVWF TRISB
-    MOVLW 0x00
+    MOVLW 0x00 ; Disable weak pull-ups on Port B
     MOVWF WPUB
-    MOVLW 0x00
+    MOVLW 0x00 ; Disable interrupt-on-change for RB0/RB1
     MOVWF IOCB
-    CLRF OPTION_REG
-    MOVLW 0x00
-    MOVWF TRISC
-    MOVLW 0x03 ; RA0, RA1 as inputs
-    MOVWF TRISA
-    MOVLW 0x42 ; ADIE and TMR2IE enabled
+    CLRF OPTION_REG ; Enable global pull-ups, clear Timer0 settings
+    MOVLW 0X00
+    MOVWF TRISC ; Port C as outputs
+    MOVLW 0x01 ; RA0 as an input
+    MOVWF TRISA ; Set RA0 as input for ADC
+    MOVLW 0x02 ; TMR2IE enabled
     MOVWF PIE1
-    MOVLW 0x9D ; PR2 = 157 for ~20 ms period
+    MOVLW 0xFF ; Timer2 period set for ~20ms (with pre/postscaler)
     MOVWF PR2
-    MOVLW 0xC5 ; Right-justified, Fosc/16
-    MOVWF ADCON1
-    BSF ADCON1, 7
-
+    CLRF ADCON1 ; Left justify
+   
     ; Bank 0 (INTCON, ports, peripherals)
-    BCF STATUS, 5
+    BCF STATUS, 5 ; Go to Bank 0
     BCF STATUS, 6
-    MOVLW 0xC5 ; AN1, ADON=1, Fosc/16
+
+    MOVLW 0X41 ; AN0 pin selected, ADON=1, ADCS=01 (Fosc/8)
     MOVWF ADCON0
-    MOVLW 0xC0 ; Enable GIE, PEIE
+    MOVLW 0x00 ; Interrupts disabled initially
     MOVWF INTCON
-    MOVLW 0x0C ; Enable PWM on CCP1
-    MOVWF CCP1CON
-    CLRF CCP2CON
-    CLRF PORTA
-    CLRF PORTB
-    CLRF PORTC
-    CLRF RCSTA
-    CLRF SSPCON
-    CLRF T1CON
-    CLRF PSTRCON
-    CLRF CM2CON1
+    MOVLW 0X00  ; Clear peripheral interrupt flags
+    MOVWF PIR1 
+    MOVLW 0XC0 ; Enable GIE and PEIE
+    MOVWF INTCON
+    CLRF CCP1CON ; Disable PWM
+    MOVLW 0X00
+    MOVWF PORTB ; Clear Port B
+    CLRF CCP2CON ; Disable second PWM
+    CLRF PORTA ; Clear Port A
+    CLRF PORTC ; Clear Port C
+    CLRF RCSTA ; Disable serial control
+    CLRF SSPCON ; Disable serial port
+    CLRF T1CON ; Disable Timer1
+    CLRF PSTRCON ; Disable PWM pulse steering
+    CLRF CM2CON1 ; Disable Comparator 2
     MOVLW 0x00
-    MOVWF TMR2
-    MOVLW 0x06 ; Prescaler 1:16, TMR2ON=1
+    MOVWF TMR2 ; Reset Timer2
+    MOVLW 0x26 ; Prescaler 1:16, postscaler 1:5, TMR2ON=1
     MOVWF T2CON
-    BSF ADCON0, 1 ; Start ADC conversion
-    BANKSEL ADCON1
-    BCF ADCON1, 7
-
-; Main Loop
+    BSF ADCON0, 1 ; Start initial ADC conversion
+   
+; Main Program Loop
 MAINLOOP:
+    MOVF ADRESH, W ; Display ADC high byte on PORTC
+    MOVWF PORTC
     GOTO MAINLOOP
-
-; Interrupt Service Routine
+    
 INTERRUPT:
-    MOVWF W_TEMP
+    
+    MOVWF W_TEMP	; Save W
     SWAPF STATUS, W
-    MOVWF STATUS_TEMP
-
-    ; Check ADC Interrupt
-    BTFSS PIR1, 6
-    GOTO CHECK_TMR2
-    BCF PIR1, 6
-    BANKSEL ADRESH
-    MOVF ADRESH, W
-    MOVWF RESULT_HI
-    BANKSEL PORTB
-    MOVF RESULT_HI, W
-    MOVWF PORTB ; Output ADRESH to PORTB for troubleshooting
-
-    ; Reset CCP1CON to PWM mode
-    MOVLW 0x0C ; PWM mode, DC1B = 00
-    MOVWF CCP1CON
-
-    ; Map ADRESH to 32 PWM duty cycles (0.932 ms to 1.517 ms)
-    MOVLW 8
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_16
-    GOTO SET_0_932MS
-
-CHECK_16:
-    MOVLW 16
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_24
-    GOTO SET_0_951MS
-
-CHECK_24:
-    MOVLW 24
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_32
-    GOTO SET_0_970MS
-
-CHECK_32:
-    MOVLW 32
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_40
-    GOTO SET_0_989MS
-
-CHECK_40:
-    MOVLW 40
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_48
-    GOTO SET_1_008MS
-
-CHECK_48:
-    MOVLW 48
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_56
-    GOTO SET_1_027MS
-
-CHECK_56:
-    MOVLW 56
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_64
-    GOTO SET_1_045MS
-
-CHECK_64:
-    MOVLW 64
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_72
-    GOTO SET_1_064MS
-
-CHECK_72:
-    MOVLW 72
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_80
-    GOTO SET_1_083MS
-
-CHECK_80:
-    MOVLW 80
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_88
-    GOTO SET_1_102MS
-
-CHECK_88:
-    MOVLW 88
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_96
-    GOTO SET_1_121MS
-
-CHECK_96:
-    MOVLW 96
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_104
-    GOTO SET_1_140MS
-
-CHECK_104:
-    MOVLW 104
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_112
-    GOTO SET_1_159MS
-
-CHECK_112:
-    MOVLW 112
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_120
-    GOTO SET_1_178MS
-
-CHECK_120:
-    MOVLW 120
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_128
-    GOTO SET_1_196MS
-
-CHECK_128:
-    MOVLW 128
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_136
-    GOTO SET_1_215MS
-
-CHECK_136:
-    MOVLW 136
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_144
-    GOTO SET_1_234MS
-
-CHECK_144:
-    MOVLW 144
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_152
-    GOTO SET_1_253MS
-
-CHECK_152:
-    MOVLW 152
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_160
-    GOTO SET_1_272MS
-
-CHECK_160:
-    MOVLW 160
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_168
-    GOTO SET_1_291MS
-
-CHECK_168:
-    MOVLW 168
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_176
-    GOTO SET_1_310MS
-
-CHECK_176:
-    MOVLW 176
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_184
-    GOTO SET_1_328MS
-
-CHECK_184:
-    MOVLW 184
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_192
-    GOTO SET_1_347MS
-
-CHECK_192:
-    MOVLW 192
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_200
-    GOTO SET_1_366MS
-
-CHECK_200:
-    MOVLW 200
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_208
-    GOTO SET_1_385MS
-
-CHECK_208:
-    MOVLW 208
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_216
-    GOTO SET_1_404MS
-
-CHECK_216:
-    MOVLW 216
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_224
-    GOTO SET_1_423MS
-
-CHECK_224:
-    MOVLW 224
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_232
-    GOTO SET_1_442MS
-
-CHECK_232:
-    MOVLW 232
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_240
-    GOTO SET_1_460MS
-
-CHECK_240:
-    MOVLW 240
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO CHECK_248
-    GOTO SET_1_479MS
-
-CHECK_248:
-    MOVLW 248
-    SUBWF RESULT_HI, W
-    BTFSC STATUS, 0
-    GOTO SET_1_517MS
-    GOTO SET_1_498MS
-
-SET_0_932MS:
-    MOVLW 0x3A
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_0_951MS:
-    MOVLW 0x3B
-    MOVWF CCPR1L
-    MOVLW 0x2C ; DC1B = 10
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_0_970MS:
+    MOVWF STATUS_TEMP	; Save STATUS
+    
+    BCF PIR1, 1         ; Clear TMR2IF
+    
+    CLRF ADC_SAVE       ; Clear position accumulator
+    
+    BTFSC ADRESH, 3     ; Check bit 3
+    CALL BIT_3
+    BTFSC ADRESH, 4     ; Check bit 4
+    CALL BIT_4
+    BTFSC ADRESH, 5     ; Check bit 5
+    CALL BIT_5
+    BTFSC ADRESH, 6     ; Check bit 6
+    CALL BIT_6
+    BTFSC ADRESH, 7     ; Check bit 7
+    CALL BIT_7
+    
+    MOVF ADC_SAVE, W    ; Load position
+    ADDWF PCL, F        ; Jump table
+    
+    GOTO P1
+    GOTO P2
+    GOTO P2
+    GOTO P3
+    GOTO P4
+    GOTO P4
+    GOTO P5
+    GOTO P6
+    GOTO P6
+    GOTO P7
+    GOTO P8
+    GOTO P8
+    GOTO P9
+    GOTO P10
+    GOTO P10
+    GOTO P11
+    GOTO P12
+    GOTO P12
+    GOTO P13
+    GOTO P14
+    GOTO P14
+    GOTO P15
+    GOTO P16
+    GOTO P16
+    GOTO P17
+    GOTO P18
+    GOTO P18
+    GOTO P19
+    GOTO P20
+    GOTO P20
+    GOTO P21
+    GOTO P21
+    
+P1:
+    MOVLW 0x32
+    MOVWF TIME
+    BSF PORTB, 0        ; Modified: Pulse high on PORTB bit 0 (RB0)
+    GOTO DELAY
+    
+P2:
     MOVLW 0x3C
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_0_989MS:
-    MOVLW 0x3D
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_008MS:
-    MOVLW 0x3E
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_027MS:
-    MOVLW 0x3F
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_045MS:
-    MOVLW 0x40
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_064MS:
-    MOVLW 0x41
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_083MS:
-    MOVLW 0x42
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_102MS:
-    MOVLW 0x43
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_121MS:
-    MOVLW 0x44
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_140MS:
-    MOVLW 0x45
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_159MS:
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P3:
     MOVLW 0x46
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_178MS:
-    MOVLW 0x47
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_196MS:
-    MOVLW 0x48
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_215MS:
-    MOVLW 0x49
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_234MS:
-    MOVLW 0x4A
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_253MS:
-    MOVLW 0x4B
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_272MS:
-    MOVLW 0x4C
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_291MS:
-    MOVLW 0x4D
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_310MS:
-    MOVLW 0x4E
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_328MS:
-    MOVLW 0x4F
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_347MS:
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P4:
     MOVLW 0x50
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_366MS:
-    MOVLW 0x51
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_385MS:
-    MOVLW 0x52
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_404MS:
-    MOVLW 0x53
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_423MS:
-    MOVLW 0x54
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_442MS:
-    MOVLW 0x55
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_460MS:
-    MOVLW 0x56
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_479MS:
-    MOVLW 0x57
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_498MS:
-    MOVLW 0x58
-    MOVWF CCPR1L
-    MOVLW 0x1C ; DC1B = 01
-    MOVWF CCP1CON
-    GOTO START_ADC
-
-SET_1_517MS:
-    MOVLW 0x5F
-    MOVWF CCPR1L
-    MOVLW 0x3C ; DC1B = 11
-    MOVWF CCP1CON
-
-START_ADC:
-    BANKSEL ADCON0
-    BSF ADCON0, 1
-
-CHECK_TMR2:
-    BTFSS PIR1, 1
-    GOTO EXIT_ISR
-    BCF PIR1, 1
-
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P5:
+    MOVLW 0x5A
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P6:
+    MOVLW 0x64
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P7:
+    MOVLW 0x6E
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P8:
+    MOVLW 0x78
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P9:
+    MOVLW 0x82
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P10:
+    MOVLW 0x8C
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P11:
+    MOVLW 0x96
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P12:
+    MOVLW 0xA0
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P13:
+    MOVLW 0xAA
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P14:
+    MOVLW 0xB4
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P15:
+    MOVLW 0xBE
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P16:
+    MOVLW 0xC8
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P17:
+    MOVLW 0xD2
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P18:
+    MOVLW 0xDC
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P19:
+    MOVLW 0xE6
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P20:
+    MOVLW 0xF2
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+P21:
+    MOVLW 0xFF
+    MOVWF TIME
+    BSF PORTB, 0
+    GOTO DELAY
+    
+DELAY:
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    DECFSZ TIME, F
+    GOTO DELAY
+    
+    BCF PORTB, 0        ; Modified: Pulse low on PORTB bit 0 (RB0)
+    BSF ADCON0, 1       ; Start next ADC conversion
+    
 EXIT_ISR:
     SWAPF STATUS_TEMP, W
     MOVWF STATUS
     SWAPF W_TEMP, F
     SWAPF W_TEMP, W
     RETFIE
-
+    
+BIT_3:
+    MOVLW 0x01
+    ADDWF ADC_SAVE, F
+    RETURN
+    
+BIT_4:
+    MOVLW 0x02
+    ADDWF ADC_SAVE, F
+    RETURN
+    
+BIT_5:
+    MOVLW 0x04
+    ADDWF ADC_SAVE, F
+    RETURN
+    
+BIT_6:
+    MOVLW 0x08
+    ADDWF ADC_SAVE, F
+    RETURN
+    
+BIT_7:
+    MOVLW 0x10
+    ADDWF ADC_SAVE, F
+    RETURN
+    
 END
